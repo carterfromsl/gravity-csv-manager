@@ -2,9 +2,41 @@
 /*
 Plugin Name: Gravity Forms CSV Exporter
 Description: Export Gravity Form submissions to a CSV file in the uploads/form-data directory.
-Version: 1.6.3
+Version: 1.6.5
 Author: StratLab Marketing
+Author URI: https://strategylab.ca
+Text Domain: gravity-csv-manager
+Requires at least: 6.0
+Requires PHP: 7.0
+Update URI: https://github.com/carterfromsl/gravity-csv-manager/
 */
+
+if ( ! defined( 'ABSPATH' ) ) {
+	exit;
+}
+
+// Connect with the StratLab Auto-Updater for plugin updates
+add_action('plugins_loaded', function() {
+    if (class_exists('StratLabUpdater')) {
+        if (!function_exists('get_plugin_data')) {
+            require_once ABSPATH . 'wp-admin/includes/plugin.php';
+        }
+        
+        $plugin_file = __FILE__;
+        $plugin_data = get_plugin_data($plugin_file);
+
+        do_action('stratlab_register_plugin', [
+            'slug' => plugin_basename($plugin_file),
+            'repo_url' => 'https://api.github.com/repos/carterfromsl/gravity-csv-manager/releases/latest',
+            'version' => $plugin_data['Version'], 
+            'name' => $plugin_data['Name'],
+            'author' => $plugin_data['Author'],
+            'homepage' => $plugin_data['PluginURI'],
+            'description' => $plugin_data['Description'],
+            'access_token' => '', // Add if needed for private repo
+        ]);
+    }
+});
 
 class GF_CSV_Exporter {
 
@@ -98,7 +130,7 @@ class GF_CSV_Exporter {
                     $form = GFAPI::get_form($form_id_to_edit);
                     $selected_fields = isset($settings[$form_id_to_edit]['fields']) ? $settings[$form_id_to_edit]['fields'] : [];
                     $strip_html = isset($settings[$form_id_to_edit]['strip_html']) ? (bool) $settings[$form_id_to_edit]['strip_html'] : false;
-					$strip_punctuation = isset($settings[$form_id_to_edit]['strip_punctuation']) ? (bool) $settings[$form_id_to_edit]['strip_punctuation'] : false;
+                    $strip_punctuation = isset($settings[$form_id_to_edit]['strip_punctuation']) ? (bool) $settings[$form_id_to_edit]['strip_punctuation'] : false;
                     $entry_limit = isset($settings[$form_id_to_edit]['entry_limit']) ? absint($settings[$form_id_to_edit]['entry_limit']) : '';
                     ?>
                     <h3>Select Fields</h3>
@@ -114,12 +146,12 @@ class GF_CSV_Exporter {
                         <input type="checkbox" name="strip_html" value="1" <?php checked($strip_html); ?>>
                         Strip HTML from field values before exporting to CSV.
                     </label><br>
-				
-					<h3>Remove Punctuation</h3>
-					<label>
-						<input type="checkbox" name="strip_punctuation" value="1" <?php checked($strip_punctuation); ?>>
-						Remove punctuation from field values before exporting to CSV.
-					</label><br>
+                
+                    <h3>Remove Punctuation</h3>
+                    <label>
+                        <input type="checkbox" name="strip_punctuation" value="1" <?php checked($strip_punctuation); ?>>
+                        Remove punctuation from field values before exporting to CSV.
+                    </label><br>
 
                     <h3>Number of Entries</h3>
                     <label>
@@ -166,7 +198,7 @@ class GF_CSV_Exporter {
             $form_id = absint($_POST['form_id']);
             $fields = isset($_POST['fields']) ? array_map('absint', $_POST['fields']) : [];
             $strip_html = isset($_POST['strip_html']) ? 1 : 0;
-			$strip_punctuation = isset($_POST['strip_punctuation']) ? 1 : 0;
+            $strip_punctuation = isset($_POST['strip_punctuation']) ? 1 : 0;
             $entry_limit = isset($_POST['entry_limit']) ? absint($_POST['entry_limit']) : null;
 
             if ($form_id && !empty($fields)) {
@@ -174,7 +206,7 @@ class GF_CSV_Exporter {
                 $settings[$form_id] = [
                     'fields' => $fields,
                     'strip_html' => $strip_html,
-					'strip_punctuation' => $strip_punctuation,
+                    'strip_punctuation' => $strip_punctuation,
                     'entry_limit' => $entry_limit
                 ];
                 update_option('gf_csv_exporter_settings', $settings);
@@ -229,21 +261,30 @@ class GF_CSV_Exporter {
         $file_handle = fopen($csv_path, 'w');
 
         if ($file_handle) {
+            // Write header row with field labels (lowercase, spaces replaced by underscores)
+            $header_row = [];
+            foreach ($fields as $field_id) {
+                $field = GFAPI::get_field($form_id, $field_id);
+                $label = !empty($field->adminLabel) ? $field->adminLabel : $field->label;
+                $header_row[] = strtolower(str_replace(' ', '_', $label));
+            }
+            fputcsv($file_handle, $header_row);
+
             foreach ($entries as $entry) {
                 $row = [];
                 foreach ($fields as $field_id) {
-					$field_value = rgar($entry, $field_id);
+                    $field_value = rgar($entry, $field_id);
 
-					// Strip HTML if the option is enabled
-					if ($strip_html) {
-						$field_value = wp_strip_all_tags($field_value);
-					}
+                    // Strip HTML if the option is enabled
+                    if ($strip_html) {
+                        $field_value = wp_strip_all_tags($field_value);
+                    }
 
-					// Purge punctuation and slashes/brackets based on the new option
-					$field_value = $this->sanitize_field_value($field_value, $strip_punctuation);
+                    // Purge punctuation and slashes/brackets based on the new option
+                    $field_value = $this->sanitize_field_value($field_value, $strip_punctuation);
 
-					$row[] = $field_value;
-				}
+                    $row[] = $field_value;
+                }
                 fputcsv($file_handle, $row);
             }
             fclose($file_handle);
@@ -251,25 +292,25 @@ class GF_CSV_Exporter {
     }
 
     // Sanitize field values to remove commas, slashes, brackets, and non-standard Unicode characters
-	private function sanitize_field_value($value, $strip_punctuation) {
-		// Replace slashes and brackets with spaces
-		$value = str_replace(['/', '\\', '(', ')', '[', ']', '<', '>', '{', '}', '|', '\r\n', '\r', '\n', "\u{00A0}"], ' ', $value);
+    private function sanitize_field_value($value, $strip_punctuation) {
+        // Replace slashes and brackets with spaces
+        $value = str_replace(['/', '\\', '(', ')', '[', ']', '<', '>', '{', '}', '|', "\r\n", "\r", "\n", "\u{00A0}"], ' ', $value);
 
-		// Remove punctuation if the option is enabled
-		if ($strip_punctuation) {
-			// Replace punctuation with spaces
-			$value = str_replace([',', '.', ':', ';', '?', '!', '&', '"', '“', '”', '…', '^', '#', '*'], ' ', $value);
-		}
+        // Remove punctuation if the option is enabled
+        if ($strip_punctuation) {
+            // Replace punctuation with spaces
+            $value = str_replace([',', '.', ':', ';', '?', '!', '&', '"', '“', '”', '…', '^', '#', '*'], ' ', $value);
+        }
 
-		// Remove non-ASCII characters (keep standard text only)
-		return preg_replace('/[^\x20-\x7E]/', '', $value);
-		
-		// Reduce multiple consecutive spaces to a single space
-		$value = preg_replace('/\s+/', ' ', $value);
+        // Remove non-ASCII characters (keep standard text only)
+        $value = preg_replace('/[^\x20-\x7E]/', '', $value);
+        
+        // Reduce multiple consecutive spaces to a single space
+        $value = preg_replace('/\s+/', ' ', $value);
 
-		// Trim any leading or trailing spaces
-		return trim($value);
-	}
+        // Trim any leading or trailing spaces
+        return trim($value);
+    }
 }
 
 // Initialize the plugin
